@@ -781,7 +781,7 @@ let API_KEY      = localStorage.getItem('nutriai_apikey') || '';
 
 function getApiKey() {
   if (API_KEY) return API_KEY;
-  const key = prompt('Enter your Anthropic API key to use AI features:');
+  const key = prompt('Enter your Google Gemini API key:\n\nGet one free at aistudio.google.com/apikey');
   if (key && key.trim()) {
     API_KEY = key.trim();
     localStorage.setItem('nutriai_apikey', API_KEY);
@@ -790,33 +790,31 @@ function getApiKey() {
   return null;
 }
 
-async function callClaude(messages, maxTokens = 1500) {
+async function callGemini(parts, maxTokens = 2048) {
   const key = getApiKey();
   if (!key) throw new Error('No API key provided');
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  const resp = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: maxTokens,
-      messages: messages
+      contents: [{ parts: parts }],
+      generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 }
     })
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    if (resp.status === 401) {
+    if (resp.status === 400 && err.error?.message?.includes('API key')) {
       localStorage.removeItem('nutriai_apikey');
       API_KEY = '';
       throw new Error('Invalid API key. Please try again.');
     }
     throw new Error(err.error?.message || `API error (${resp.status})`);
   }
-  return resp.json();
+  const data = await resp.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('No response from AI. Please try again.');
+  return text;
 }
 
 // ── TOAST & HAPTIC ────────────────────────────────────────────
@@ -888,14 +886,10 @@ async function analyseFood() {
   label.innerHTML = '<div class="spinner"></div> Analysing...';
 
   try {
-    const data = await callClaude([{
-      role: 'user',
-      content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: currentB64 } },
-        { type: 'text', text: 'Analyse this food image. Respond ONLY in valid JSON, no markdown:\n{"foods":["food names"],"total_calories":number,"protein_g":number,"carbs_g":number,"fat_g":number,"fiber_g":number,"breakdown":"2-3 sentences about each food and its nutrition","health_rating":"Healthy or Moderate or Indulgent","tip":"one tip to make this healthier"}' }
-      ]
-    }], 1000);
-    const raw  = data.content?.find(b => b.type === 'text')?.text || '{}';
+    const raw = await callGemini([
+      { inline_data: { mime_type: 'image/jpeg', data: currentB64 } },
+      { text: 'Analyse this food image. Respond ONLY in valid JSON, no markdown, no code fences:\n{"foods":["food names"],"total_calories":number,"protein_g":number,"carbs_g":number,"fat_g":number,"fiber_g":number,"breakdown":"2-3 sentences about each food and its nutrition","health_rating":"Healthy or Moderate or Indulgent","tip":"one tip to make this healthier"}' }
+    ], 1000);
     let result;
     try { result = JSON.parse(raw.replace(/```json|```/g, '').trim()); }
     catch { result = { total_calories:0, protein_g:0, carbs_g:0, fat_g:0, breakdown:'Could not identify food.', tip:'', foods:[] }; }
@@ -1096,8 +1090,7 @@ Give me:
 Use clear headings. Be specific. Keep it motivating and practical.`;
 
   try {
-    const data = await callClaude([{ role: 'user', content: prompt }], 2000);
-    const text = data.content?.find(b => b.type === 'text')?.text || 'Could not generate plan.';
+    const text = await callGemini([{ text: prompt }], 4096);
 
     const html = text
       .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')

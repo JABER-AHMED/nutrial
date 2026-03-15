@@ -24,7 +24,7 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   // Always go network-first for API calls
-  if (e.request.url.includes('anthropic.com')) {
+  if (e.request.url.includes('googleapis.com')) {
     e.respondWith(fetch(e.request));
     return;
   }
